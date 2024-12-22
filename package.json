@@ -7,6 +7,15 @@
   "author": "markusstrasser",
   "owner": "synth",
   "license": "MIT",
+  "preferences": [
+    {
+      "name": "exportPath",
+      "type": "directory",
+      "required": false,
+      "title": "Export Directory",
+      "description": "Choose where to save exported CSV files"
+    }
+  ],
   "commands": [
     {
       "name": "srs1",
