@@ -9,12 +9,25 @@ import {
   getPreferenceValues,
   environment,
   useNavigation,
+  BrowserExtension,
+  Clipboard,
+  getSelectedText,
+  AI,
 } from "@raycast/api";
-import { useState, useCallback } from "react";
-import { writeFile } from "fs/promises";
-import path from "path";
 
+import { Model } from "@raycast/types";
+
+import { useAI } from "@raycast/utils";
+
+import { runAppleScript } from "@raycast/utils";
+import { useState, useCallback, useEffect } from "react";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+
+import srsRules from "./prompt";
 const exportDir = "/Users/alien/Downloads";
+
+// console.log("snips", Snippets);
 
 const INITIAL_CARDS = [
   {
@@ -137,12 +150,99 @@ const CommentForm = ({ initialComment, onSubmit }) => {
   );
 };
 
-// Main Command Component
-export default function Command() {
-  const [cards, setCards] = useState(INITIAL_CARDS);
-  const { push } = useNavigation();
-  const preferences = getPreferenceValues();
+const parseAIResponse = (aiResponse: string) => {
+  try {
+    const parsed = JSON.parse(aiResponse);
+    const cards = parsed.data;
 
+    return Array.isArray(cards)
+      ? cards.map((card) => ({
+          ...card,
+          isSelected: false,
+          isAnswerRevealed: false,
+          choices: { A: false, B: false, C: false },
+          comment: "",
+        }))
+      : [];
+  } catch (error) {
+    console.error("Failed to parse AI response:", error);
+    return [];
+  }
+};
+
+interface Card {
+  question: string;
+  answer: string;
+  isSelected: boolean;
+  isAnswerRevealed: boolean;
+  choices: { A: boolean; B: boolean; C: boolean };
+  comment: string;
+  options: {
+    A: string;
+    B: string;
+    C: string;
+  };
+}
+
+export default function Command() {
+  const [cards, setCards] = useState<Card[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const { push } = useNavigation();
+
+  useEffect(() => {
+    async function initializeCards() {
+      try {
+        const selectedText = await getSelectedText();
+
+        const prompt = `
+            Create *four* (4) SRS anki flashcards from the material given the guidelines. 
+            Your answer most be fully parse-able JSON containting the question, answer and possbile critiques the user can chose from for the card,
+             ie. {"data": [{"question": "first card front", "answer": "card back", "options": {"A": "too ambigous", "B": "useless trivia without ...", "C":"the content is ... "}, {"question": "...", ....}]}.
+
+            One card has the structure:
+             interface Card {
+    question: string;
+    answer: string;
+      options: {
+      A: string;
+      B: string;
+      C: string;
+    };
+    }
+
+          Your response will be pasted into an UI after running through JSON.parse! No preamble, just valid JSON.
+           
+          <material>
+          ${selectedText}
+          </material>
+          ----
+          
+          ${srsRules}
+        `;
+
+        const aiResponse = await AI.ask(prompt, {
+          model: AI.Model.Anthropic_Claude_Sonnet,
+          creativity: 1,
+        });
+
+        console.log("AI response", aiResponse);
+
+        const parsedCards = parseAIResponse(aiResponse);
+        setCards(parsedCards);
+      } catch (error) {
+        console.error("Failed to initialize cards:", error);
+        await showToast({
+          style: Toast.Style.Failure,
+          title: "Failed to generate cards",
+          message: error instanceof Error ? error.message : "Unknown error",
+        });
+      } finally {
+        setIsLoading(false);
+      }
+    }
+
+    initializeCards();
+  }, []);
   const handleUpdateCard = useCallback((index, updates) => {
     setCards((prevCards) => updateCard(prevCards, index, updates));
   }, []);
