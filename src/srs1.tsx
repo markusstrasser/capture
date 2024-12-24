@@ -49,7 +49,12 @@ const updateCard = (cards: Card[], index: number, updates: Partial<Card>) =>
   cards.map((card, i) => (i === index ? { ...card, ...updates } : card));
 
 const getCardDetailMarkdown = (card: Card) => {
-  const sections = [];
+  const sections = [
+    "## Question",
+    card.question,
+    "\n## Answer",
+    card.isAnswerRevealed ? card.answer : "*Press Space to reveal answer*",
+  ];
 
   if (card.isAnswerRevealed) {
     sections.push(
@@ -60,8 +65,6 @@ const getCardDetailMarkdown = (card: Card) => {
       "\n## Freeform Comment",
       card.comment ? card.comment : "*Press 4 to add comment*",
     );
-  } else {
-    sections.push("\n*Press Space to reveal answer*");
   }
 
   return sections.join("\n");
@@ -346,21 +349,31 @@ export default function Command() {
     </ActionPanel>
   );
 
-  if (isLoading) {
+  if (isLoading || cards.length === 0) {
     return (
-      <List isLoading={true}>
-        <List.EmptyView title="Generating Cards" description={statusMessage} icon={Icon.Clock} />
+      <List
+        isLoading={isLoading}
+        navigationTitle="SRS Cards"
+        searchBarPlaceholder={isLoading ? "Loading..." : "No cards generated"}
+      >
+        <List.Item title="">
+          <List.EmptyView
+            title={isLoading ? "Generating Cards" : "No Cards Available"}
+            description={statusMessage}
+            icon={isLoading ? Icon.Clock : Icon.ExclamationMark}
+          />
+        </List.Item>
       </List>
     );
   }
 
   return (
-    <List isShowingDetail>
+    <List isShowingDetail navigationTitle="SRS Cards" searchBarPlaceholder="Search cards...">
       {cards.map((card, index) => (
         <List.Item
           key={index}
-          title={card.question}
           icon={card.isSelected ? Icon.CheckCircle : Icon.Circle}
+          title={card.question}
           detail={<List.Item.Detail markdown={getCardDetailMarkdown(card)} />}
           actions={renderActions(card, index)}
         />
