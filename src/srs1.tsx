@@ -14,54 +14,41 @@ import {
   getSelectedText,
   AI,
 } from "@raycast/api";
-
-import { Model } from "@raycast/types";
-
 import { useAI } from "@raycast/utils";
-
 import { runAppleScript } from "@raycast/utils";
 import { useState, useCallback, useEffect } from "react";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-
 import srsRules from "./prompt";
+
 const exportDir = "/Users/alien/Downloads";
 
-// console.log("snips", Snippets);
+const JSON_REPAIR_PROMPT = `
+Fix the following AI response into valid JSON that matches this structure:
+{"data": [{"question": string, "answer": string, "options": {"A": string, "B": string, "C": string}}]}
 
-const INITIAL_CARDS = [
-  {
-    question: "What is the capital of France?",
-    answer: "Paris is the capital of France 🗼",
-    isSelected: false,
-    isAnswerRevealed: false,
-    choices: { A: false, B: false, C: false },
-    comment: "",
-    options: {
-      A: "London",
-      B: "Paris",
-      C: "Berlin",
-    },
-  },
-  {
-    question: "Naehhh?",
-    answer: "Tessr",
-    isSelected: false,
-    isAnswerRevealed: false,
-    choices: { A: false, B: false, C: false },
-    comment: "",
-    options: {
-      A: "weae",
-      B: "asds",
-      C: "werqwr",
-    },
-  },
-];
+AI Response to fix:
+`;
+
+interface Card {
+  question: string;
+  answer: string;
+  isSelected: boolean;
+  isAnswerRevealed: boolean;
+  choices: { A: boolean; B: boolean; C: boolean };
+  comment: string;
+  options: {
+    A: string;
+    B: string;
+    C: string;
+  };
+}
 
 // Card Utilities
-const updateCard = (cards, index, updates) => cards.map((card, i) => (i === index ? { ...card, ...updates } : card));
+const updateCard = (cards: Card[], index: number, updates: Partial<Card>) =>
+  cards.map((card, i) => (i === index ? { ...card, ...updates } : card));
 
-const getCardDetailMarkdown = (card) => {
+const getCardDetailMarkdown = (card: Card) => {
   const sections = [];
 
   if (card.isAnswerRevealed) {
@@ -80,7 +67,7 @@ const getCardDetailMarkdown = (card) => {
   return sections.join("\n");
 };
 
-const getFeedbackString = (card) => {
+const getFeedbackString = (card: Card) => {
   const selectedChoices = Object.entries(card.choices)
     .filter(([_, selected]) => selected)
     .map(([key]) => card.options[key])
@@ -90,15 +77,24 @@ const getFeedbackString = (card) => {
 };
 
 // CSV Export
-const exportToCSV = async (cards) => {
+const exportToCSV = async (cards: Card[]) => {
   const filePath = path.join(exportDir, "anki_card_review.csv");
+  const timestamp = new Date().toLocaleString("en-US", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
   const csvContent = [
-    ["Selected", "Question", "Answer", "Feedback"],
+    ["Selected", "Question", "Answer", "Feedback", "Timestamp"],
     ...cards.map((card) => [
       card.isSelected ? "1" : "0",
       `"${card.question.replace(/"/g, '""')}"`,
       `"${card.answer.replace(/"/g, '""').replace(/\n/g, "\\n")}"`,
       `"${getFeedbackString(card).replace(/"/g, '""')}"`,
+      `"${timestamp}"`,
     ]),
   ].join("\n");
 
@@ -120,11 +116,11 @@ const exportToCSV = async (cards) => {
 };
 
 // Comment Form Component
-const CommentForm = ({ initialComment, onSubmit }) => {
+const CommentForm = ({ initialComment, onSubmit }: { initialComment: string; onSubmit: (comment: string) => void }) => {
   const { pop } = useNavigation();
 
   const handleSubmit = useCallback(
-    (values) => {
+    (values: { comment: string }) => {
       onSubmit(values.comment);
       pop();
       showToast({ style: Toast.Style.Success, title: "Comment saved" });
@@ -150,47 +146,57 @@ const CommentForm = ({ initialComment, onSubmit }) => {
   );
 };
 
-const parseAIResponse = (aiResponse: string) => {
+const parseAIResponse = async (aiResponse: string, setStatusMessage: (msg: string) => void) => {
   try {
     const parsed = JSON.parse(aiResponse);
     const cards = parsed.data;
 
-    return Array.isArray(cards)
-      ? cards.map((card) => ({
-          ...card,
-          isSelected: false,
-          isAnswerRevealed: false,
-          choices: { A: false, B: false, C: false },
-          comment: "",
-        }))
-      : [];
+    if (!Array.isArray(cards)) {
+      throw new Error("Invalid cards array structure");
+    }
+
+    return cards.map((card) => ({
+      ...card,
+      isSelected: false,
+      isAnswerRevealed: false,
+      choices: { A: false, B: false, C: false },
+      comment: "",
+    }));
   } catch (error) {
     console.error("Failed to parse AI response:", error);
-    return [];
+    setStatusMessage("Initial parse failed, attempting repair with GPT-4...");
+
+    try {
+      const repairPrompt = `${JSON_REPAIR_PROMPT}${aiResponse}`;
+      const repairedJson = await AI.ask(repairPrompt, {
+        model: AI.Model.GPT4,
+        creativity: 0,
+      });
+
+      setStatusMessage("Repair attempt completed, parsing result...");
+
+      const repaired = JSON.parse(repairedJson);
+      return repaired.data.map((card) => ({
+        ...card,
+        isSelected: false,
+        isAnswerRevealed: false,
+        choices: { A: false, B: false, C: false },
+        comment: "",
+      }));
+    } catch (repairError) {
+      console.error("Repair attempt failed:", repairError);
+      setStatusMessage("Both parsing attempts failed. Please try again.");
+      return [];
+    }
   }
 };
-
-interface Card {
-  question: string;
-  answer: string;
-  isSelected: boolean;
-  isAnswerRevealed: boolean;
-  choices: { A: boolean; B: boolean; C: boolean };
-  comment: string;
-  options: {
-    A: string;
-    B: string;
-    C: string;
-  };
-}
-// ... existing imports ...
 
 export default function Command() {
   const [cards, setCards] = useState<Card[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [statusMessage, setStatusMessage] = useState("Initializing...");
   const { push } = useNavigation();
 
-  // Move all callback definitions to the top level
   const handleUpdateCard = useCallback((index: number, updates: Partial<Card>) => {
     setCards((prevCards) => updateCard(prevCards, index, updates));
   }, []);
@@ -232,45 +238,50 @@ export default function Command() {
     [handleUpdateCard, push],
   );
 
-  // AI initialization effect
   useEffect(() => {
     async function initializeCards() {
       try {
+        setStatusMessage("Getting selected text...");
         const selectedText = await getSelectedText();
+
+        setStatusMessage("Generating cards with Claude...");
         const prompt = `
-        Create *four* (4) SRS anki flashcards from the material given the guidelines. 
-        Your answer most be fully parse-able JSON containting the question, answer and possbile critiques the user can chose from for the card,
-         ie. {"data": [{"question": "first card front", "answer": "card back", "options": {"A": "too ambigous", "B": "useless trivia without ...", "C":"the content is ... "}, {"question": "...", ....}]}.
+            Create *four* (4) SRS anki flashcards from the material given the guidelines. 
+            Your answer most be fully parse-able JSON containting the question, answer and possbile critiques the user can chose from for the card,
+             ie. {"data": [{"question": "first card front", "answer": "card back", "options": {"A": "too ambigous", "B": "useless trivia without ...", "C":"the content is ... "}, {"question": "...", ....}]}.
 
-        One card has the structure:
-         interface Card {
-question: string;
-answer: string;
-  options: {
-  A: string;
-  B: string;
-  C: string;
-};
-}
+            One card has the structure:
+             interface Card {
+    question: string;
+    answer: string;
+      options: {
+      A: string;
+      B: string;
+      C: string;
+    };
+    }
 
-      Your response will be pasted into an UI after running through JSON.parse! No preamble, just valid JSON.
-       
-      <material>
-      ${selectedText}
-      </material>
-      ----
-      
-      ${srsRules}
-    `;
+          Your response will be pasted into an UI after running through JSON.parse! No preamble, just valid JSON.
+           
+          <material>
+          ${selectedText}
+          </material>
+          ----
+          
+          ${srsRules}
+        `;
+
         const aiResponse = await AI.ask(prompt, {
           model: AI.Model.Anthropic_Claude_Sonnet,
           creativity: 1,
         });
 
-        const parsedCards = parseAIResponse(aiResponse);
+        setStatusMessage("Processing AI response...");
+        const parsedCards = await parseAIResponse(aiResponse, setStatusMessage);
         setCards(parsedCards);
       } catch (error) {
         console.error("Failed to initialize cards:", error);
+        setStatusMessage("Error: Failed to generate cards");
         await showToast({
           style: Toast.Style.Failure,
           title: "Failed to generate cards",
@@ -284,7 +295,6 @@ answer: string;
     initializeCards();
   }, []);
 
-  // Render actions as a pure function
   const renderActions = (card: Card, index: number) => (
     <ActionPanel>
       {!card.isAnswerRevealed && (
@@ -335,6 +345,14 @@ answer: string;
       )}
     </ActionPanel>
   );
+
+  if (isLoading) {
+    return (
+      <List isLoading={true}>
+        <List.EmptyView title="Generating Cards" description={statusMessage} icon={Icon.Clock} />
+      </List>
+    );
+  }
 
   return (
     <List isShowingDetail>
