@@ -183,49 +183,89 @@ interface Card {
     C: string;
   };
 }
+// ... existing imports ...
 
 export default function Command() {
   const [cards, setCards] = useState<Card[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const { push } = useNavigation();
 
+  // Move all callback definitions to the top level
+  const handleUpdateCard = useCallback((index: number, updates: Partial<Card>) => {
+    setCards((prevCards) => updateCard(prevCards, index, updates));
+  }, []);
+
+  const handleExportToCSV = useCallback(() => exportToCSV(cards), [cards]);
+
+  const handleToggleAnswer = useCallback(
+    (index: number, isAnswerRevealed: boolean) => {
+      handleUpdateCard(index, { isAnswerRevealed: !isAnswerRevealed });
+    },
+    [handleUpdateCard],
+  );
+
+  const handleToggleSelect = useCallback(
+    (index: number, isSelected: boolean) => {
+      handleUpdateCard(index, { isSelected: !isSelected });
+    },
+    [handleUpdateCard],
+  );
+
+  const handleChoiceSelect = useCallback(
+    (index: number, choices: Record<string, boolean>, choice: string) => {
+      handleUpdateCard(index, {
+        choices: { ...choices, [choice]: !choices[choice] },
+      });
+    },
+    [handleUpdateCard],
+  );
+
+  const handleAddComment = useCallback(
+    (index: number, comment: string) => {
+      push(
+        <CommentForm
+          initialComment={comment}
+          onSubmit={(newComment) => handleUpdateCard(index, { comment: newComment })}
+        />,
+      );
+    },
+    [handleUpdateCard, push],
+  );
+
+  // AI initialization effect
   useEffect(() => {
     async function initializeCards() {
       try {
         const selectedText = await getSelectedText();
-
         const prompt = `
-            Create *four* (4) SRS anki flashcards from the material given the guidelines. 
-            Your answer most be fully parse-able JSON containting the question, answer and possbile critiques the user can chose from for the card,
-             ie. {"data": [{"question": "first card front", "answer": "card back", "options": {"A": "too ambigous", "B": "useless trivia without ...", "C":"the content is ... "}, {"question": "...", ....}]}.
+        Create *four* (4) SRS anki flashcards from the material given the guidelines. 
+        Your answer most be fully parse-able JSON containting the question, answer and possbile critiques the user can chose from for the card,
+         ie. {"data": [{"question": "first card front", "answer": "card back", "options": {"A": "too ambigous", "B": "useless trivia without ...", "C":"the content is ... "}, {"question": "...", ....}]}.
 
-            One card has the structure:
-             interface Card {
-    question: string;
-    answer: string;
-      options: {
-      A: string;
-      B: string;
-      C: string;
-    };
-    }
+        One card has the structure:
+         interface Card {
+question: string;
+answer: string;
+  options: {
+  A: string;
+  B: string;
+  C: string;
+};
+}
 
-          Your response will be pasted into an UI after running through JSON.parse! No preamble, just valid JSON.
-           
-          <material>
-          ${selectedText}
-          </material>
-          ----
-          
-          ${srsRules}
-        `;
-
+      Your response will be pasted into an UI after running through JSON.parse! No preamble, just valid JSON.
+       
+      <material>
+      ${selectedText}
+      </material>
+      ----
+      
+      ${srsRules}
+    `;
         const aiResponse = await AI.ask(prompt, {
           model: AI.Model.Anthropic_Claude_Sonnet,
           creativity: 1,
         });
-
-        console.log("AI response", aiResponse);
 
         const parsedCards = parseAIResponse(aiResponse);
         setCards(parsedCards);
@@ -243,93 +283,58 @@ export default function Command() {
 
     initializeCards();
   }, []);
-  const handleUpdateCard = useCallback((index, updates) => {
-    setCards((prevCards) => updateCard(prevCards, index, updates));
-  }, []);
 
-  const handleExportToCSV = useCallback(() => exportToCSV(cards), [cards]);
+  // Render actions as a pure function
+  const renderActions = (card: Card, index: number) => (
+    <ActionPanel>
+      {!card.isAnswerRevealed && (
+        <ActionPanel.Item
+          title="Show Answer"
+          icon={Icon.Eye}
+          onAction={() => handleToggleAnswer(index, card.isAnswerRevealed)}
+          shortcut={{ modifiers: [], key: "space" }}
+        />
+      )}
+      {card.isAnswerRevealed && (
+        <>
+          <ActionPanel.Section>
+            <ActionPanel.Item
+              title={card.isSelected ? "Deselect Card" : "Select Card"}
+              icon={card.isSelected ? Icon.CheckCircle : Icon.Circle}
+              onAction={() => handleToggleSelect(index, card.isSelected)}
+              shortcut={{ modifiers: [], key: "space" }}
+            />
 
-  const renderActions = (card, index) => {
-    const handleToggleAnswer = useCallback(
-      () => handleUpdateCard(index, { isAnswerRevealed: !card.isAnswerRevealed }),
-      [index, card.isAnswerRevealed, handleUpdateCard],
-    );
-
-    const handleToggleSelect = useCallback(
-      () => handleUpdateCard(index, { isSelected: !card.isSelected }),
-      [index, card.isSelected, handleUpdateCard],
-    );
-
-    const handleChoiceSelect = useCallback(
-      (choice) =>
-        handleUpdateCard(index, {
-          choices: { ...card.choices, [choice]: !card.choices[choice] },
-        }),
-      [index, card.choices, handleUpdateCard],
-    );
-
-    const handleAddComment = useCallback(
-      () =>
-        push(
-          <CommentForm
-            initialComment={card.comment}
-            onSubmit={(newComment) => handleUpdateCard(index, { comment: newComment })}
-          />,
-        ),
-      [index, card.comment, handleUpdateCard, push],
-    );
-
-    return (
-      <ActionPanel>
-        {!card.isAnswerRevealed && (
-          <ActionPanel.Item
-            title="Show Answer"
-            icon={Icon.Eye}
-            onAction={handleToggleAnswer}
-            shortcut={{ modifiers: [], key: "space" }}
-          />
-        )}
-        {card.isAnswerRevealed && (
-          <>
-            <ActionPanel.Section>
+            {Object.entries(card.options).map(([choice, text], idx) => (
               <ActionPanel.Item
-                title={card.isSelected ? "Deselect Card" : "Select Card"}
-                icon={card.isSelected ? Icon.CheckCircle : Icon.Circle}
-                onAction={handleToggleSelect}
-                shortcut={{ modifiers: [], key: "space" }}
+                key={choice}
+                title={`${idx + 1}. ${text}`}
+                icon={card.choices[choice] ? Icon.CheckCircle : Icon.Circle}
+                onAction={() => handleChoiceSelect(index, card.choices, choice)}
+                shortcut={{ modifiers: [], key: String(idx + 1) }}
               />
+            ))}
 
-              {Object.entries(card.options).map(([choice, text], idx) => (
-                <ActionPanel.Item
-                  key={choice}
-                  title={`${idx + 1}. ${text}`}
-                  icon={card.choices[choice] ? Icon.CheckCircle : Icon.Circle}
-                  onAction={() => handleChoiceSelect(choice)}
-                  shortcut={{ modifiers: [], key: String(idx + 1) }}
-                />
-              ))}
+            <ActionPanel.Item
+              title="Add/Edit Comment"
+              icon={Icon.Text}
+              shortcut={{ modifiers: [], key: "4" }}
+              onAction={() => handleAddComment(index, card.comment)}
+            />
+          </ActionPanel.Section>
 
-              <ActionPanel.Item
-                title="Add/Edit Comment"
-                icon={Icon.Text}
-                shortcut={{ modifiers: [], key: "4" }}
-                onAction={handleAddComment}
-              />
-            </ActionPanel.Section>
-
-            <ActionPanel.Section>
-              <ActionPanel.Item
-                title="Export to CSV"
-                icon={Icon.Download}
-                onAction={handleExportToCSV}
-                shortcut={{ modifiers: ["cmd"], key: "s" }}
-              />
-            </ActionPanel.Section>
-          </>
-        )}
-      </ActionPanel>
-    );
-  };
+          <ActionPanel.Section>
+            <ActionPanel.Item
+              title="Export to CSV"
+              icon={Icon.Download}
+              onAction={handleExportToCSV}
+              shortcut={{ modifiers: ["cmd"], key: "s" }}
+            />
+          </ActionPanel.Section>
+        </>
+      )}
+    </ActionPanel>
+  );
 
   return (
     <List isShowingDetail>
