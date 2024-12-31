@@ -81,7 +81,8 @@ const getFeedbackString = (card: Card) => {
 
 // CSV Export
 const exportToCSV = async (cards: Card[]) => {
-  const filePath = path.join(exportDir, "anki_card_review.csv");
+  const time = new Date().toISOString();
+  const filePath = path.join(exportDir, `anki_card_review_${time}.csv`);
   const timestamp = new Date().toLocaleString("en-US", {
     year: "numeric",
     month: "2-digit",
