@@ -11,6 +11,7 @@ import {
   popToRoot,
   LocalStorage,
   getSelectedText,
+  environment,
 } from "@raycast/api";
 import { useState, useCallback, useEffect } from "react";
 import { CommentForm } from "./components";
@@ -84,10 +85,17 @@ export default function Command() {
   const handleAddComment = useCallback(
     (index: number, comment: string) => {
       return (
-        <CommentForm
-          initialComment={comment}
-          onSubmit={(newComment) => handleUpdateCard(index, { comment: newComment })}
-        />
+        <ActionPanel>
+          <Action.Push
+            title="Add Comment"
+            target={
+              <CommentForm
+                initialComment={comment}
+                onSubmit={(newComment) => handleUpdateCard(index, { comment: newComment })}
+              />
+            }
+          />
+        </ActionPanel>
       );
     },
     [handleUpdateCard],
@@ -211,11 +219,16 @@ export default function Command() {
               />
             ))}
 
-            <ActionPanel.Item
+            <Action.Push
               title="Add/Edit Comment"
               icon={Icon.Text}
               shortcut={{ modifiers: [], key: "c" }}
-              onAction={() => handleAddComment(index, card.comment)}
+              target={
+                <CommentForm
+                  initialComment={card.comment}
+                  onSubmit={(newComment) => handleUpdateCard(index, { comment: newComment })}
+                />
+              }
             />
           </ActionPanel.Section>
 
