@@ -6,26 +6,20 @@ import {
   showToast,
   Toast,
   Form,
-  getPreferenceValues,
-  environment,
   useNavigation,
-  BrowserExtension,
-  Clipboard,
   getSelectedText,
   AI,
 } from "@raycast/api";
-import { useAI } from "@raycast/utils";
-import { runAppleScript } from "@raycast/utils";
 import { useState, useCallback, useEffect } from "react";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import srsRules from "./prompt";
+import srsPrompt from "./prompt";
 
 const exportDir = "/Users/alien/Downloads";
 
 const JSON_REPAIR_PROMPT = `
 Fix the following AI response into valid JSON that matches this structure:
-{"data": [{"question": string, "answer": string, "options": {"A": string, "B": string, "C": string}}]}
+{"data": [{"question": string, "answer": string}]}
 
 AI Response to fix:
 `;
@@ -33,15 +27,10 @@ AI Response to fix:
 interface Card {
   question: string;
   answer: string;
-  isSelected: boolean;
   isAnswerRevealed: boolean;
-  choices: { A: boolean; B: boolean; C: boolean };
+  rating: number | null;
   comment: string;
-  options: {
-    A: string;
-    B: string;
-    C: string;
-  };
+  options?: Record<string, string>;
 }
 
 // Card Utilities
@@ -58,25 +47,14 @@ const getCardDetailMarkdown = (card: Card) => {
 
   if (card.isAnswerRevealed) {
     sections.push(
-      "\n## Feedback",
-      ...Object.entries(card.options).map(
-        ([key, value], index) => `- [${card.choices[key] ? "x" : " "}] ${index + 1}. ${value}`,
-      ),
-      "\n## Freeform Comment",
-      card.comment ? card.comment : "*Press 4 to add comment*",
+      "\n## Rating",
+      card.rating ? `Rating: ${card.rating}/4` : "*Press 1-4 to rate*",
+      "\n## Comment",
+      card.comment ? card.comment : "*Press C to add comment*",
     );
   }
 
   return sections.join("\n");
-};
-
-const getFeedbackString = (card: Card) => {
-  const selectedChoices = Object.entries(card.choices)
-    .filter(([_, selected]) => selected)
-    .map(([key]) => card.options[key])
-    .join(". ");
-
-  return [selectedChoices, card.comment].filter(Boolean).join(". ");
 };
 
 // CSV Export
@@ -92,12 +70,12 @@ const exportToCSV = async (cards: Card[]) => {
   });
 
   const csvContent = [
-    ["Selected", "Question", "Answer", "Feedback", "Timestamp"],
+    ["Rating", "Question", "Answer", "Comment", "Timestamp"],
     ...cards.map((card) => [
-      card.isSelected ? "1" : "0",
+      card.rating?.toString() || "",
       `"${card.question.replace(/"/g, '""')}"`,
       `"${card.answer.replace(/"/g, '""').replace(/\n/g, "\\n")}"`,
-      `"${getFeedbackString(card).replace(/"/g, '""')}"`,
+      `"${card.comment?.replace(/"/g, '""') || ""}"`,
       `"${timestamp}"`,
     ]),
   ].join("\n");
@@ -161,9 +139,8 @@ const parseAIResponse = async (aiResponse: string, setStatusMessage: (msg: strin
 
     return cards.map((card) => ({
       ...card,
-      isSelected: false,
       isAnswerRevealed: false,
-      choices: { A: false, B: false, C: false },
+      rating: null,
       comment: "",
     }));
   } catch (error) {
@@ -182,9 +159,8 @@ const parseAIResponse = async (aiResponse: string, setStatusMessage: (msg: strin
       const repaired = JSON.parse(repairedJson);
       return repaired.data.map((card) => ({
         ...card,
-        isSelected: false,
         isAnswerRevealed: false,
-        choices: { A: false, B: false, C: false },
+        rating: null,
         comment: "",
       }));
     } catch (repairError) {
@@ -194,6 +170,14 @@ const parseAIResponse = async (aiResponse: string, setStatusMessage: (msg: strin
     }
   }
 };
+
+// Add rating descriptions to make the UI more helpful
+const RATING_DESCRIPTIONS = {
+  1: "Again - Complete blackout",
+  2: "Hard - Significant effort to recall",
+  3: "Good - Some effort to recall",
+  4: "Easy - Perfect recall",
+} as const;
 
 export default function Command() {
   const [cards, setCards] = useState<Card[]>([]);
@@ -214,18 +198,9 @@ export default function Command() {
     [handleUpdateCard],
   );
 
-  const handleToggleSelect = useCallback(
-    (index: number, isSelected: boolean) => {
-      handleUpdateCard(index, { isSelected: !isSelected });
-    },
-    [handleUpdateCard],
-  );
-
-  const handleChoiceSelect = useCallback(
-    (index: number, choices: Record<string, boolean>, choice: string) => {
-      handleUpdateCard(index, {
-        choices: { ...choices, [choice]: !choices[choice] },
-      });
+  const handleRating = useCallback(
+    (index: number, rating: number) => {
+      handleUpdateCard(index, { rating });
     },
     [handleUpdateCard],
   );
@@ -250,30 +225,19 @@ export default function Command() {
 
         setStatusMessage("Generating cards with Claude...");
         const prompt = `
-            Create *four* (4) SRS anki flashcards from the material given the guidelines. 
-            Your answer most be fully parse-able JSON containting the question, answer and possbile critiques the user can chose from for the card,
-             ie. {"data": [{"question": "first card front", "answer": "card back", "options": {"A": "too ambigous", "B": "useless trivia without ...", "C":"the content is ... "}, {"question": "...", ....}]}.
+  Create *four* (4) SRS anki flashcards from the material. 
+  Return valid JSON matching this structure:
+  {"data": [{"question": "card front", "answer": "card back"}]}
 
-            One card has the structure:
-             interface Card {
-    question: string;
-    answer: string;
-      options: {
-      A: string;
-      B: string;
-      C: string;
-    };
-    }
-
-          Your response will be pasted into an UI after running through JSON.parse! No preamble, just valid JSON.
-           
-          <material>
-          ${selectedText}
-          </material>
-          ----
-          
-          ${srsRules}
-        `;
+  No preamble or explanation, just the JSON.
+         
+  <material>
+  ${selectedText}
+  </material>
+  ----
+  
+  ${srsPrompt}
+`;
 
         const aiResponse = await AI.ask(prompt, {
           model: AI.Model.Anthropic_Claude_Sonnet,
@@ -312,27 +276,20 @@ export default function Command() {
       {card.isAnswerRevealed && (
         <>
           <ActionPanel.Section>
-            <ActionPanel.Item
-              title={card.isSelected ? "Deselect Card" : "Select Card"}
-              icon={card.isSelected ? Icon.CheckCircle : Icon.Circle}
-              onAction={() => handleToggleSelect(index, card.isSelected)}
-              shortcut={{ modifiers: [], key: "space" }}
-            />
-
-            {Object.entries(card.options).map(([choice, text], idx) => (
+            {[1, 2, 3, 4].map((rating) => (
               <ActionPanel.Item
-                key={choice}
-                title={`${idx + 1}. ${text}`}
-                icon={card.choices[choice] ? Icon.CheckCircle : Icon.Circle}
-                onAction={() => handleChoiceSelect(index, card.choices, choice)}
-                shortcut={{ modifiers: [], key: String(idx + 1) }}
+                key={rating}
+                title={`${rating} - ${RATING_DESCRIPTIONS[rating as keyof typeof RATING_DESCRIPTIONS]}`}
+                icon={card.rating === rating ? Icon.StarFilled : Icon.Star}
+                onAction={() => handleRating(index, rating)}
+                shortcut={{ modifiers: [], key: String(rating) }}
               />
             ))}
 
             <ActionPanel.Item
               title="Add/Edit Comment"
               icon={Icon.Text}
-              shortcut={{ modifiers: [], key: "4" }}
+              shortcut={{ modifiers: [], key: "c" }}
               onAction={() => handleAddComment(index, card.comment)}
             />
           </ActionPanel.Section>
@@ -373,7 +330,7 @@ export default function Command() {
       {cards.map((card, index) => (
         <List.Item
           key={index}
-          icon={card.isSelected ? Icon.CheckCircle : Icon.Circle}
+          icon={card.rating ? Icon.StarFilled : Icon.Star}
           title={card.question}
           detail={<List.Item.Detail markdown={getCardDetailMarkdown(card)} />}
           actions={renderActions(card, index)}

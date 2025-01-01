@@ -1,4 +1,4 @@
-export default `
+export const srsRules = `
 <rules>
 Rule: Write Atomic Flashcards
 Cards should be short. They should refer to as little information as possible. They should be like chemical bonds, linking individual atoms of knowledge.
@@ -465,8 +465,10 @@ Configurational isomer
 Cis/trans isomers are a kind of …
 Diastereomer
 
----
+</rules>`;
 
+export const extraPrinciples = `
+<principles>
 Also try to integrate these principles:
 
 Generating High-Quality Spaced Repetition Flashcards
@@ -642,5 +644,9 @@ Examples of Atomizing and Deconstructing Cards:
 		Initial Attempt:  What determines the degree of surprise from new information? ; Prior knowledge   Checking: ✓ Single fact ✓ Fundamental principle ✗ Too vague/general ✗ Not enough context ✗ Multiple possible answers
 		Improved Version:  In cognitive science, what factor determines whether a piece of information produces surprise in an observer? ; Prior knowledge  
 
-</rules>
-`;
+</principles>`;
+
+// const promptExtra = `${srsRules} ${extraPrinciples}`;
+
+//? extra prompt might be contradictory with the rules
+export default srsRules;
