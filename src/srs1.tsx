@@ -12,12 +12,31 @@ import {
   LocalStorage,
   getSelectedText,
   environment,
+  AIError,
 } from "@raycast/api";
 import { useState, useCallback, useEffect } from "react";
 import { CommentForm } from "./components";
 import { Card, STORAGE_KEY } from "./types";
 import { updateCard, getCardDetailMarkdown, exportToCSV, parseAIResponse } from "./utils";
 import srsPrompt from "./prompt";
+
+const generateCardsWithModel = async (text: string, updateStatus: (msg: string) => Promise<void>) => {
+  const prompt = `
+    Create *eight* (8) SRS anki flashcards from the material. 
+    Return valid JSON matching this structure:
+    {"data": [{"question": "card front", "answer": "card back"}]}
+    No preamble or explanation, just the JSON.
+    
+    <material>${text}</material>
+    ----
+    ${srsPrompt}
+  `;
+
+  return AI.ask(prompt, {
+    model: AI.Model.Anthropic_Claude_Haiku,
+    creativity: 0.5,
+  });
+};
 
 export default function Command() {
   const [cards, setCards] = useState<Card[]>([]);
@@ -126,60 +145,60 @@ export default function Command() {
         setIsLoading(true);
         await closeMainWindow();
 
-        await updateStatus("Getting selected text...");
-        let selectedText: string;
-        try {
-          selectedText = await getSelectedText();
-          if (!selectedText?.trim()) {
-            throw new Error("No text selected");
-          }
-        } catch (error) {
-          await showToast({
-            style: Toast.Style.Failure,
-            title: "No Text Selected",
-            message: "Please select some text and try again",
-          });
-          return;
+        const selectedText = await getSelectedText();
+        if (!selectedText?.trim()) {
+          throw new Error("No text selected");
         }
 
-        await updateStatus("Generating cards with Claude...");
-        const prompt = `
-          Create *three* (3) SRS anki flashcards from the material. 
-          Return valid JSON matching this structure:
-          {"data": [{"question": "card front", "answer": "card back"}]}
+        await updateStatus("Generating cards with multiple models...");
 
-          No preamble or explanation, just the JSON.
-                 
-          <material>
-          ${selectedText}
-          </material>
-          ----
+        // Run 3 parallel card generations
+        const modelResults = await Promise.allSettled([
+          generateCardsWithModel(selectedText, updateStatus),
+          generateCardsWithModel(selectedText, updateStatus),
+          generateCardsWithModel(selectedText, updateStatus),
+        ]);
+
+        await updateStatus("Processing AI responses...");
+
+        // Collect successful results
+        const allCards = await Promise.all(
+          modelResults
+            .filter((result): result is PromiseFulfilledResult<string> => result.status === "fulfilled")
+            .map((result) => parseAIResponse(result.value, updateStatus)),
+        ).then((cardSets) => cardSets.flat());
+
+        if (allCards.length === 0) {
+          throw new Error("No valid cards generated");
+        }
+
+        // Use Claude to select the best 3 cards
+        const selectionPrompt = `
+          Select the best 3 flashcards from this set. Return only valid JSON:
+          {"data": [{"question": "card front", "answer": "card back"}]}
           
-          ${srsPrompt}
+          <cards>
+          ${JSON.stringify(allCards)}
+          </cards>
         `;
 
-        const aiResponse = await AI.ask(prompt, {
-          model: AI.Model.Anthropic_Claude_Haiku,
-          creativity: 1,
+        const finalSelection = await AI.ask(selectionPrompt, {
+          model: AI.Model.Anthropic_Claude_Sonnet,
+          creativity: 0.1,
         });
 
-        await updateStatus("Processing AI response...");
-        const parsedCards = await parseAIResponse(aiResponse, updateStatus);
+        const finalCards = await parseAIResponse(finalSelection, updateStatus);
 
-        if (parsedCards.length > 0) {
-          setCards(parsedCards);
-          await showToast({
-            style: Toast.Style.Success,
-            title: "Cards Generated",
-            message: `Created ${parsedCards.length} cards`,
-            primaryAction: {
-              title: "Show Cards",
-              onAction: () => {
-                popToRoot({ clearSearchBar: true });
-              },
-            },
-          });
-        }
+        setCards(finalCards);
+        await showToast({
+          style: Toast.Style.Success,
+          title: "Cards Generated",
+          message: `Created ${finalCards.length} cards from ${allCards.length} candidates`,
+          primaryAction: {
+            title: "Show Cards",
+            onAction: () => popToRoot({ clearSearchBar: true }),
+          },
+        });
       } catch (error) {
         console.error("Failed to initialize cards:", error);
         await showToast({
